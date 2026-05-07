@@ -102,19 +102,8 @@ Before sending the PR link, confirm:
 - [ ] All attempted tasks are committed on your `solution/your-name` branch
 - [ ] `SUBMISSION.md` is filled in
 - [ ] Your repository is set to **Public** so we can review it
-- [ ] The PR is opened within **your own fork**, not the original repo
-
----
-
-## 💡 Assessment Criteria
-
-| Criterion | Weight |
-|-----------|--------|
-| Correctness – does it work? | 30% |
-| Security posture | 20% |
-| Code quality and clarity | 20% |
-| Documentation and reasoning | 15% |
-| Git hygiene (commits, PR description) | 15% |
+- [ ] The PR is opened within **your own fork**, not the original repogit remote set-url origin https://github.com/Palladium-hub/platform-engineer-challenge.git
+git push -u origin master
 
 ---
 
