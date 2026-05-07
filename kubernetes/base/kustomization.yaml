@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - deployment.yaml
+  - service.yaml
+  - configmap.yaml
+  # TODO (Task 2a): Add secret.yaml once created
+  # TODO (Task 2a): Add pod-disruption-budget.yaml
+  # TODO (Task 2c): Add network-policy.yaml

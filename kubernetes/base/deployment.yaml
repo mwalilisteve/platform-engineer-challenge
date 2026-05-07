@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-service
+  namespace: default
+  labels:
+    app: api-service
+    version: v1.2.0
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-service
+  template:
+    metadata:
+      labels:
+        app: api-service
+    spec:
+      # ISSUE 1: Container runs as root — no securityContext defined
+      containers:
+        - name: api
+          image: ghcr.io/acme/api-service:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "3000"
+            # ISSUE 4: SECRET_KEY sourced from a ConfigMap (plaintext), not a Secret
+            - name: SECRET_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: api-config
+                  key: secret_key
+          # ISSUE 2: No resource requests or limits defined
+          # ISSUE 3: No liveness or readiness probes defined

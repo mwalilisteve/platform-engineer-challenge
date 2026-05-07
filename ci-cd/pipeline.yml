@@ -1,0 +1,53 @@
+# ci-cd/pipeline.yml
+# This pipeline has at least 5 bugs and several security issues.
+# Find and fix them. Document each change with a comment.
+
+name: Build and Deploy
+
+# BUG 1: This triggers on ALL events including PRs — image should not be pushed on PRs
+on: push
+
+env:
+  AWS_REGION: af-south-1
+  ECR_REPOSITORY: acme/api-service
+  # BUG 2: Hardcoded credentials — replace with OIDC-based auth (Task 3b)
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # BUG 3: AWS account ID is hardcoded
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region $AWS_REGION | \
+            docker login --username AWS --password-stdin \
+            123456789012.dkr.ecr.$AWS_REGION.amazonaws.com
+
+      - name: Build Docker image
+        run: |
+          docker build -t $ECR_REPOSITORY:${{ github.sha }} .
+
+      # BUG 4: Image is pushed before tests run
+      - name: Push image to ECR
+        run: |
+          docker tag $ECR_REPOSITORY:${{ github.sha }} \
+            123456789012.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:${{ github.sha }}
+          docker push \
+            123456789012.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:${{ github.sha }}
+
+      - name: Run tests
+        run: |
+          # BUG 5: Wrong command — this project uses npm, not yarn
+          yarn test
+
+      # TODO (Task 3b): Add Trivy vulnerability scan here (fail on CRITICAL)
+      # TODO (Task 3c): Add GitOps update step here (push to main only)
