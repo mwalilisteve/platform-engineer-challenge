@@ -53,35 +53,56 @@ Full task details are in [`docs/TASKS.md`](docs/TASKS.md).
 
 ## 🚀 Getting Started
 
+### Step 1 — Clone the repository
+
 ```bash
-# Fork this repository to your own GitHub account
-# Clone your fork
-git clone https://github.com/YOUR_USERNAME/platform-engineer-challenge.git
+git clone https://github.com/Palladium-hub/platform-engineer-challenge.git
 cd platform-engineer-challenge
-
-# Create a branch for your work
-git checkout -b solution/your-name
-
-# Work through the tasks — commit as you go
-# Meaningful commit messages are assessed
-
-# When done, open a Pull Request against your own fork's main branch
-# Share the PR link with us
 ```
 
-> **Do not open a PR against the original repository.**
+### Step 2 — Create your own GitHub repository
+
+1. Go to [github.com/new](https://github.com/new)
+2. Name it `platform-engineer-challenge` (or similar)
+3. Set it to **Public**
+4. **Do not** initialise it with a README, .gitignore, or licence
+
+### Step 3 — Push to your own repository
+
+```bash
+# Point the remote to your own repo
+git remote set-url origin https://github.com/YOUR_USERNAME/platform-engineer-challenge.git
+
+# Push
+git push -u origin master
+```
+
+### Step 4 — Work on a branch
+
+```bash
+git checkout -b solution/your-name
+```
+
+Work through the tasks, committing as you go. Meaningful commit messages are part of the assessment.
+
+### Step 5 — Submit
+
+1. Fill in [`SUBMISSION.md`](SUBMISSION.md) honestly — what you completed, decisions made, and what you'd do with more time.
+2. Push your branch and open a **Pull Request within your own repository** (base: `master` ← compare: `solution/your-name`).
+3. Share the **PR link** with your hiring contact.
+
+> **Do not open a PR against the original Palladium-hub repository.**
 
 ---
 
-## 📝 Submission
+## 📝 Submission Checklist
 
-Before submitting, fill in [`SUBMISSION.md`](SUBMISSION.md) with:
-- What you completed
-- Key decisions and trade-offs
-- What you would do with more time
-- Any assumptions you made
+Before sending the PR link, confirm:
 
-Then share the **GitHub PR link** with your hiring contact.
+- [ ] All attempted tasks are committed on your `solution/your-name` branch
+- [ ] `SUBMISSION.md` is filled in
+- [ ] Your repository is set to **Public** so we can review it
+- [ ] The PR is opened within **your own fork**, not the original repo
 
 ---
 
