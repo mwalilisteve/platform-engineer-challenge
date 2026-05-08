@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  namespace: default
+data:
+  # FIX (Issue 4): secret_key has been removed from this ConfigMap.
+  # It now lives in kubernetes/base/secret.yaml as a Kubernetes Secret.
+  # Only non-sensitive configuration values remain here.
+  NODE_ENV: production
+  LOG_LEVEL: info

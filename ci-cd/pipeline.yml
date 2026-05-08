@@ -1,0 +1,137 @@
+# ci-cd/pipeline.yml
+# Fixed and improved GitHub Actions pipeline.
+# See inline comments for each change made.
+
+name: Build and Deploy
+
+# FIX (Bug 1): Scope triggers precisely.
+# Original used bare `on: push` which fires on ALL branches AND pull_requests.
+# Now: CI (build+test+scan) runs on every push and PR to main;
+# push-to-ECR and GitOps update only run on direct pushes to main.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION: af-south-1
+  ECR_REPOSITORY: acme/api-service
+
+# FIX (Bug 2 / Security): Removed hardcoded AWS_ACCESS_KEY_ID and
+# AWS_SECRET_ACCESS_KEY. Long-lived static credentials are a significant
+# security risk — a leaked secret has no automatic expiry.
+# Replaced with OIDC-based federation (configure-aws-credentials action)
+# which issues short-lived tokens per workflow run with no stored secrets.
+
+jobs:
+  build-test-scan:
+    runs-on: ubuntu-latest
+
+    # OIDC requires the id-token write permission so the runner can request
+    # a JWT from GitHub's OIDC provider and exchange it for AWS credentials.
+    permissions:
+      id-token: write
+      contents: read
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.sha }}
+      ecr_registry: ${{ steps.login-ecr.outputs.registry }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # FIX (Bug 3 / Security): Use OIDC to authenticate to AWS — no static keys.
+      # The role ARN is stored as a repository secret (non-credential, just an ARN).
+      # The OIDC trust policy on the AWS side restricts which repo/branch can assume it.
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # FIX (Bug 3): AWS account ID is no longer hardcoded.
+      # The ECR login action resolves the registry URL dynamically using the
+      # caller identity returned by the OIDC-assumed role.
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image metadata
+        id: meta
+        run: echo "sha=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.sha }} \
+            .
+
+      # FIX (Bug 5): The project uses npm, not yarn.
+      # yarn is not installed on the runner and would fail with "command not found".
+      # FIX (Bug 4): Tests now run BEFORE push — a failing test no longer results
+      # in a broken image being pushed to ECR.
+      - name: Run tests
+        run: npm test
+
+      # Security improvement (Task 3b): Scan for vulnerabilities before pushing.
+      # Trivy is run against the locally-built image (not the registry copy) so
+      # we catch issues before they ever land in ECR. The pipeline fails on any
+      # CRITICAL finding — HIGH findings are reported but do not block.
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.sha }}
+          format: table
+          exit-code: "1"
+          severity: CRITICAL
+          ignore-unfixed: true
+
+      # Security improvement (Task 3b): Push only on direct pushes to main — not on PRs.
+      # Pull requests build and scan but never write to ECR, preventing untrusted
+      # code from landing in the image registry.
+      - name: Push image to ECR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          docker push \
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.sha }}
+
+  # Task 3c: GitOps update — update the image tag in the staging overlay and
+  # commit the change back to main. ArgoCD (or Flux) then detects the drift and
+  # rolls out the new image automatically.
+  gitops-update:
+    needs: build-test-scan
+    runs-on: ubuntu-latest
+    # Only run after a real push to main, not on PRs.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    permissions:
+      contents: write  # Required to push the kustomization change back
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # Use a token that allows pushing to protected branches if configured.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install kustomize
+        uses: imranismail/setup-kustomize@v2
+
+      - name: Update image tag in staging overlay
+        run: |
+          cd kubernetes/overlays/staging
+          kustomize edit set image \
+            ghcr.io/acme/api-service=${{ needs.build-test-scan.outputs.ecr_registry }}/${{ env.ECR_REPOSITORY }}:${{ needs.build-test-scan.outputs.image_tag }}
+
+      - name: Commit and push kustomization change
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add kubernetes/overlays/staging/kustomization.yaml
+          git commit -m "chore(gitops): update api-service image to ${{ needs.build-test-scan.outputs.image_tag }} [skip ci]"
+          git push

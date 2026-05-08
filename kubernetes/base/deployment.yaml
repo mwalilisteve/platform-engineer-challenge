@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-service
+  namespace: default
+  labels:
+    app: api-service
+    version: v1.2.0
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api-service
+  template:
+    metadata:
+      labels:
+        app: api-service
+    spec:
+      # FIX (Issue 1): Run as a non-root user.
+      # Running as root inside a container grants unnecessary host privileges;
+      # if the container is compromised, the attacker has root-equivalent access.
+      # runAsNonRoot forces the container runtime to reject root UIDs.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+
+      containers:
+        - name: api
+          image: ghcr.io/acme/api-service:latest
+          ports:
+            - containerPort: 3000
+
+          # FIX (Issue 2): Add resource requests and limits.
+          # Without requests, the scheduler cannot make informed placement decisions.
+          # Without limits, a misbehaving pod can starve other workloads on the node.
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "3000"
+            # FIX (Issue 4): Read SECRET_KEY from a Kubernetes Secret, not a ConfigMap.
+            # ConfigMaps are plaintext and visible to anyone with read access to the
+            # namespace. Secrets are base64-encoded and can be further protected with
+            # RBAC, encryption at rest, or external secret operators (e.g., ESO).
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: api-secret
+                  key: secret_key
+
+          # FIX (Issue 3): Add liveness and readiness probes.
+          # Without a readiness probe, traffic is sent to pods before they are ready,
+          # causing errors during startup or after crashes.
+          # Without a liveness probe, a deadlocked pod is never restarted.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3

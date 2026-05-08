@@ -1,0 +1,46 @@
+# kubernetes/base/network-policy.yaml
+# Task 2c: Default-deny NetworkPolicy for api-service pods.
+# Only ingress from ingress-controller pods and egress to kube-dns are allowed.
+# All other ingress and egress is denied by default.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-service-netpol
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      app: api-service
+
+  # Explicitly manage both ingress and egress; anything not listed is denied.
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # Allow traffic only from pods labelled role: ingress-controller.
+    # This covers any namespace — if your ingress controller lives in
+    # ingress-nginx namespace, also add a namespaceSelector there.
+    - from:
+        - podSelector:
+            matchLabels:
+              role: ingress-controller
+      ports:
+        - port: 3000
+          protocol: TCP
+
+  egress:
+    # Allow DNS resolution via kube-dns (UDP and TCP on port 53).
+    # Without this, the pod cannot resolve any service names.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP

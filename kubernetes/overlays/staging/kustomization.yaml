@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Task 2b: Staging overlay — sets replicas, image tag, and environment label.
+
+bases:
+  - ../../base
+
+# Add environment: staging label to all resources in this overlay.
+commonLabels:
+  environment: staging
+
+# Set replica count to 2 for staging (base has 1).
+replicas:
+  - name: api-service
+    count: 2
+
+# Pin the image to a specific tag rather than "latest".
+# The CI/CD pipeline (Task 3c) updates this via: kustomize edit set image
+images:
+  - name: ghcr.io/acme/api-service
+    newTag: v1.2.0

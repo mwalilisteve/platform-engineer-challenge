@@ -1,0 +1,14 @@
+# kubernetes/base/pod-disruption-budget.yaml
+# FIX (Issue 5): Ensure at least 1 pod is always available during voluntary disruptions
+# (e.g., node drains, rolling updates, cluster upgrades).
+# Without a PDB, Kubernetes may evict all pods simultaneously, causing a full outage.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api-service-pdb
+  namespace: default
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: api-service
