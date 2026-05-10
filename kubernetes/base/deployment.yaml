@@ -35,8 +35,8 @@ spec:
             # ISSUE 4: SECRET_KEY sourced from a ConfigMap (plaintext), not a Secret
             - name: SECRET_KEY
               valueFrom:
-                configMapKeyRef:
-                  name: api-config
+                secretKeyRef:
+                  name: api-secret
                   key: secret_key
           # ISSUE 2: No resource requests or limits defined
           resources:
