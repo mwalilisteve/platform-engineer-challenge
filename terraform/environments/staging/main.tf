@@ -67,13 +67,17 @@ module "eks" {
   cluster_version = var.cluster_version
   environment     = var.environment
   vpc_id          = module.vpc.vpc_id
-
-  # FIX (Bug 2): Control-plane ENIs must live in private subnets.
-  subnet_ids = module.vpc.private_subnets
+  subnet_ids      = module.vpc.private_subnets
 
   node_group_subnet_ids = module.vpc.private_subnets
+  node_instance_type    = var.node_instance_type
+  node_desired_size     = var.node_desired_size
+  node_min_size         = var.node_min_size
+  node_max_size         = var.node_max_size
 
-  app_bucket_name = var.app_bucket_name
+  app_sa_namespace = var.app_sa_namespace
+  app_sa_name      = var.app_sa_name
+  app_bucket_name  = var.app_bucket_name
 
   tags = local.common_tags
 }
