@@ -7,7 +7,7 @@ metadata:
     app: api-service
 spec:
   # ISSUE 6: Should be ClusterIP — ingress is handled separately
-  type: LoadBalancer
+  type: ClusterIP
   selector:
     app: api-service
   ports:

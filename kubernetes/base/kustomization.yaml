@@ -5,6 +5,9 @@ resources:
   - deployment.yaml
   - service.yaml
   - configmap.yaml
+  - secret.yaml
+  - pod-disruption-budget.yaml
+  - network-policy.yaml
   # TODO (Task 2a): Add secret.yaml once created
   # TODO (Task 2a): Add pod-disruption-budget.yaml
   # TODO (Task 2c): Add network-policy.yaml
