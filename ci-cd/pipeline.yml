@@ -5,8 +5,11 @@
 name: Build and Deploy
 
 # BUG 1: This triggers on ALL events including PRs — image should not be pushed on PRs
-on: push
-
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
 env:
   AWS_REGION: af-south-1
   ECR_REPOSITORY: acme/api-service
