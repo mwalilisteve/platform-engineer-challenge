@@ -27,13 +27,6 @@ spec:
           image: ghcr.io/acme/api-service:latest
           ports:
             - containerPort: 3000
-          resources:
-            requests:
-              cpu: "100m"
-              memory: "128Mi"
-            limits:
-              cpu: "500m"
-              memory: "256Mi"
           env:
             - name: NODE_ENV
               value: production
@@ -46,4 +39,26 @@ spec:
                   name: api-config
                   key: secret_key
           # ISSUE 2: No resource requests or limits defined
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
           # ISSUE 3: No liveness or readiness probes defined
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 3
