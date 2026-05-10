@@ -17,11 +17,23 @@ spec:
         app: api-service
     spec:
       # ISSUE 1: Container runs as root — no securityContext defined
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
         - name: api
           image: ghcr.io/acme/api-service:latest
           ports:
             - containerPort: 3000
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
           env:
             - name: NODE_ENV
               value: production
