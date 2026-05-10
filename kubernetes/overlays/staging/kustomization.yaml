@@ -8,4 +8,16 @@ kind: Kustomization
 #   - Set image tag to v1.2.0
 #   - Add label environment: staging to all resources
 
-bases: []
+bases:
+  - ../../base
+
+commonLabels:
+  environment: staging
+
+replicas:
+  - name: api-service
+    count: 2
+
+images:
+  - name: ghcr.io/acme/api-service
+    newTag: v1.2.0
