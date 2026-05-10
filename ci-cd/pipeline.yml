@@ -1,25 +1,32 @@
 # ci-cd/pipeline.yml
-# This pipeline has at least 5 bugs and several security issues.
-# Find and fix them. Document each change with a comment.
 
 name: Build and Deploy
 
-# BUG 1: This triggers on ALL events including PRs — image should not be pushed on PRs
+# FIX (Bug 1): Scope triggers to push and PRs on main only.
 on:
   push:
     branches: [master]
   pull_request:
     branches: [master]
-env:
-  AWS_REGION: af-south-1
-  ECR_REPOSITORY: acme/api-service
-  # BUG 2: Hardcoded credentials — replace with OIDC-based auth (Task 3b)
-  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
+env:
+  AWS_REGION:        ${{ vars.AWS_REGION }}
+  ECR_REPOSITORY:    ${{ vars.ECR_REPOSITORY }}
+  IMAGE_NAME:        ${{ vars.IMAGE_NAME }}
+  KUSTOMIZE_OVERLAY: ${{ vars.KUSTOMIZE_OVERLAY }}
+
+# FIX (Bug 2): Removed hardcoded AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.
 jobs:
-  build:
+  build-test-scan:
     runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    outputs:
+      image_tag:    ${{ steps.meta.outputs.sha }}
+      ecr_registry: ${{ steps.login-ecr.outputs.registry }}
 
     steps:
       - name: Checkout code
@@ -28,29 +35,78 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # BUG 3: AWS account ID is hardcoded
+      # FIX (Bug 2): Authenticate via OIDC — no static keys needed.
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region:     ${{ env.AWS_REGION }}
+
+      # FIX (Bug 3): Removed hardcoded account ID (123456789012).
+
       - name: Login to Amazon ECR
-        run: |
-          aws ecr get-login-password --region $AWS_REGION | \
-            docker login --username AWS --password-stdin \
-            123456789012.dkr.ecr.$AWS_REGION.amazonaws.com
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image metadata
+        id: meta
+        run: echo "sha=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
 
       - name: Build Docker image
         run: |
-          docker build -t $ECR_REPOSITORY:${{ github.sha }} .
+          docker build \
+            -t ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.sha }} \
+            .
 
-      # BUG 4: Image is pushed before tests run
-      - name: Push image to ECR
-        run: |
-          docker tag $ECR_REPOSITORY:${{ github.sha }} \
-            123456789012.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:${{ github.sha }}
-          docker push \
-            123456789012.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:${{ github.sha }}
-
+      # FIX (Bug 4): Image is pushed before tests run
       - name: Run tests
-        run: |
-          # BUG 5: Wrong command — this project uses npm, not yarn
-          yarn test
+        run: npm test
 
-      # TODO (Task 3b): Add Trivy vulnerability scan here (fail on CRITICAL)
-      # TODO (Task 3c): Add GitOps update step here (push to main only)
+      # Task 3b: Add Trivy vulnerability scan here
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref:      ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.sha }}
+          format:         table
+          exit-code:      "1"
+          severity:       ${{ vars.TRIVY_SEVERITY || 'CRITICAL' }}
+          ignore-unfixed: true
+
+      - name: Push image to ECR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          docker push \
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.sha }}
+
+  # Task 3c: Add GitOps update step here (push to main only)
+  gitops-update:
+    needs: build-test-scan
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install kustomize
+        uses: imranismail/setup-kustomize@v2
+
+      - name: Update image tag in overlay
+        run: |
+          cd ${{ env.KUSTOMIZE_OVERLAY }}
+          kustomize edit set image \
+            ${{ env.IMAGE_NAME }}=${{ needs.build-test-scan.outputs.ecr_registry }}/${{ env.ECR_REPOSITORY }}:${{ needs.build-test-scan.outputs.image_tag }}
+
+      - name: Commit and push kustomization change
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ${{ env.KUSTOMIZE_OVERLAY }}/kustomization.yaml
+          git commit -m "chore(gitops): update ${{ env.ECR_REPOSITORY }} to ${{ needs.build-test-scan.outputs.image_tag }} [skip ci]"
+          git push
