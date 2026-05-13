@@ -5,9 +5,9 @@ name: Build and Deploy
 # FIX (Bug 1): Scope triggers to push and PRs on main only.
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
-    branches: [master]
+    branches: [main]
 
 env:
   AWS_REGION:        ${{ vars.AWS_REGION }}
