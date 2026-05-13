@@ -41,11 +41,11 @@ spec:
           # ISSUE 2: No resource requests or limits defined
           resources:
             requests:
-              cpu: "100m"
+              cpu: "1"
               memory: "128Mi"
             limits:
-              cpu: "500m"
-              memory: "256Mi"
+              cpu: "2"
+              memory: "3Gi"
           # ISSUE 3: No liveness or readiness probes defined
           readinessProbe:
             httpGet:
