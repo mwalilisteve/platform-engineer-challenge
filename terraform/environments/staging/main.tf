@@ -1,6 +1,4 @@
 # terraform/environments/staging/main.tf
-# This file has intentional bugs. Find and fix them.
-# Document each fix with a comment explaining what was wrong.
 
 terraform {
   required_version = ">= 1.5.0"
@@ -16,8 +14,6 @@ provider "aws" {
   region = var.aws_region
 }
 
-# BUG: Data source is referencing a non-existent attribute
-data "aws_caller_identity" "this" {}
 
 data "aws_availability_zones" "available" {
   state = "available"
@@ -48,15 +44,15 @@ module "vpc" {
   enable_dns_hostnames = true
   enable_dns_support   = true
 
-  # BUG: These tags are required for EKS to discover subnets, but the values are wrong
+  # FIX (Bug 1): ELB subnet discovery tags must use the string "1", not the integer 0.
   public_subnet_tags = {
     "kubernetes.io/cluster/${local.cluster_name}" = "owned"
-    "kubernetes.io/role/elb"                      = 0
+    "kubernetes.io/role/elb"                      = "1"
   }
 
   private_subnet_tags = {
     "kubernetes.io/cluster/${local.cluster_name}" = "owned"
-    "kubernetes.io/role/internal-elb"             = 0
+    "kubernetes.io/role/internal-elb"             = "1"
   }
 
   tags = local.common_tags
@@ -69,11 +65,17 @@ module "eks" {
   cluster_version = var.cluster_version
   environment     = var.environment
   vpc_id          = module.vpc.vpc_id
-
-  # BUG: This is passing public subnets for the control plane — should be private
-  subnet_ids = module.vpc.public_subnets
+  subnet_ids      = module.vpc.private_subnets
 
   node_group_subnet_ids = module.vpc.private_subnets
+  node_instance_type    = var.node_instance_type
+  node_desired_size     = var.node_desired_size
+  node_min_size         = var.node_min_size
+  node_max_size         = var.node_max_size
+
+  app_sa_namespace = var.app_sa_namespace
+  app_sa_name      = var.app_sa_name
+  app_bucket_name  = var.app_bucket_name
 
   tags = local.common_tags
 }

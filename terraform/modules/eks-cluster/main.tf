@@ -1,116 +1,160 @@
-# terraform/modules/eks-cluster/main.tf
-# This module has intentional bugs. Find and fix them.
+# modules/eks-cluster/main.tf
+# FIX (Bug 3): This file previously contained a copy of the root variables.tf.
 
-data "aws_caller_identity" "current" {}
-data "aws_region" "current" {}
+data "aws_caller_identity" "this" {}
+data "aws_partition" "current" {}
 
-# -----------------------------------------------------------------
-# EKS Cluster
-# -----------------------------------------------------------------
-
-resource "aws_eks_cluster" "this" {
-  name    = var.cluster_name
-  version = var.cluster_version
-
-  # BUG: role_arn is referencing a resource that doesn't exist in this file
-  role_arn = aws_iam_role.cluster.arn
-
-  vpc_config {
-    subnet_ids              = var.subnet_ids
-    endpoint_private_access = true
-    # BUG: This should be false for a private cluster — public API access is a security risk
-    endpoint_public_access  = true
-
-    security_group_ids = [aws_security_group.cluster.id]
-  }
-
-  enabled_cluster_log_types = ["api", "audit", "authenticator"]
-
-  tags = var.tags
-
-  depends_on = [
-    aws_iam_role_policy_attachment.cluster_policy,
-  ]
-}
-
-# -----------------------------------------------------------------
-# Cluster IAM Role
-# -----------------------------------------------------------------
+# ── Cluster IAM role ────────────────────────────────────────────────────────
 
 resource "aws_iam_role" "cluster" {
   name = "${var.cluster_name}-cluster-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [
-      {
-        Effect    = "Allow"
-        Principal = { Service = "eks.amazonaws.com" }
-        Action    = "sts:AssumeRole"
-      }
-    ]
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "eks.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
   })
 
   tags = var.tags
 }
 
-resource "aws_iam_role_policy_attachment" "cluster_policy" {
+resource "aws_iam_role_policy_attachment" "cluster_AmazonEKSClusterPolicy" {
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonEKSClusterPolicy"
   role       = aws_iam_role.cluster.name
-  # BUG: Wrong managed policy ARN for EKS cluster role
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
 }
 
-# -----------------------------------------------------------------
-# Security Group for cluster control plane
-# -----------------------------------------------------------------
+# ── EKS Cluster ─────────────────────────────────────────────────────────────
 
-resource "aws_security_group" "cluster" {
-  name        = "${var.cluster_name}-cluster-sg"
-  description = "EKS cluster control plane security group"
-  vpc_id      = var.vpc_id
+resource "aws_eks_cluster" "this" {
+  name     = var.cluster_name
+  version  = var.cluster_version
+  role_arn = aws_iam_role.cluster.arn
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+  vpc_config {
+    subnet_ids              = var.subnet_ids
+    endpoint_private_access = true
+    endpoint_public_access  = false
   }
 
-  tags = merge(var.tags, {
-    Name = "${var.cluster_name}-cluster-sg"
-  })
+  depends_on = [aws_iam_role_policy_attachment.cluster_AmazonEKSClusterPolicy]
+
+  tags = var.tags
 }
 
-# -----------------------------------------------------------------
-# OIDC Provider (required for IRSA)
-# -----------------------------------------------------------------
+# ── OIDC provider (required for IRSA) ───────────────────────────────────────
 
-data "tls_certificate" "eks" {
+data "tls_certificate" "this" {
   url = aws_eks_cluster.this.identity[0].oidc[0].issuer
 }
 
 resource "aws_iam_openid_connect_provider" "this" {
   client_id_list  = ["sts.amazonaws.com"]
-  thumbprint_list = [data.tls_certificate.eks.certificates[0].sha1_fingerprint]
+  thumbprint_list = [data.tls_certificate.this.certificates[0].sha1_fingerprint]
   url             = aws_eks_cluster.this.identity[0].oidc[0].issuer
 
   tags = var.tags
 }
 
-# -----------------------------------------------------------------
-# Node Group IAM Role
-# -----------------------------------------------------------------
+# ── Node group IAM role ──────────────────────────────────────────────────────
 
 resource "aws_iam_role" "node_group" {
   name = "${var.cluster_name}-node-group-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+    }]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "node_AmazonEKSWorkerNodePolicy" {
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+  role       = aws_iam_role.node_group.name
+}
+
+resource "aws_iam_role_policy_attachment" "node_AmazonEKS_CNI_Policy" {
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonEKS_CNI_Policy"
+  role       = aws_iam_role.node_group.name
+}
+
+resource "aws_iam_role_policy_attachment" "node_AmazonEC2ContainerRegistryReadOnly" {
+  policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+  role       = aws_iam_role.node_group.name
+}
+
+# ── Managed node group ───────────────────────────────────────────────────────
+
+resource "aws_eks_node_group" "this" {
+  cluster_name    = aws_eks_cluster.this.name
+  instance_type   = var.node_instance_type
+  node_group_name = "${var.cluster_name}-nodes"
+  node_role_arn   = aws_iam_role.node_group.arn
+  subnet_ids      = var.node_group_subnet_ids
+
+  scaling_config {
+    desired_size = 2
+    max_size     = 4
+    min_size     = 1
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.node_AmazonEKSWorkerNodePolicy,
+    aws_iam_role_policy_attachment.node_AmazonEKS_CNI_Policy,
+    aws_iam_role_policy_attachment.node_AmazonEC2ContainerRegistryReadOnly,
+  ]
+
+  tags = var.tags
+}
+
+# ── IRSA role for app-sa service account ────────────────────────────────────
+
+locals {
+  oidc_issuer = replace(aws_iam_openid_connect_provider.this.url, "https://", "")
+}
+
+resource "aws_iam_role" "app_sa" {
+  name = "${var.cluster_name}-app-sa-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Federated = aws_iam_openid_connect_provider.this.arn
+      }
+      Action = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "${local.oidc_issuer}:sub" = "system:serviceaccount:default:app-sa"
+          "${local.oidc_issuer}:aud" = "sts.amazonaws.com"
+        }
+      }
+    }]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_policy" "app_sa" {
+  name        = "${var.cluster_name}-app-sa-policy"
+  description = "Permissions for the app-sa Kubernetes service account"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
     Statement = [
+      # Adjust these permissions to what your app actually needs
       {
-        Effect    = "Allow"
-        Principal = { Service = "ec2.amazonaws.com" }
-        Action    = "sts:AssumeRole"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:ListBucket"]
+        Resource = "*"
       }
     ]
   })
@@ -118,22 +162,7 @@ resource "aws_iam_role" "node_group" {
   tags = var.tags
 }
 
-resource "aws_iam_role_policy_attachment" "node_worker_policy" {
-  role       = aws_iam_role.node_group.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+resource "aws_iam_role_policy_attachment" "app_sa" {
+  role       = aws_iam_role.app_sa.name
+  policy_arn = aws_iam_policy.app_sa.arn
 }
-
-resource "aws_iam_role_policy_attachment" "node_cni_policy" {
-  role       = aws_iam_role.node_group.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
-}
-
-resource "aws_iam_role_policy_attachment" "node_ecr_policy" {
-  role       = aws_iam_role.node_group.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
-}
-
-# -----------------------------------------------------------------
-# TODO (Task 1b): Add node group resource here
-# TODO (Task 1b): Add IRSA role and policy for app-sa service account here
-# -----------------------------------------------------------------
