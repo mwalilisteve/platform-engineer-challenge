@@ -2,85 +2,46 @@
 
 ## 5a. Metrics
 
-### Tooling Choice: Prometheus + Grafana + Node Exporter + kube-state-metrics + cAdvisor
+### Tooling: Prometheus + Grafana + Node Exporter + kube-state-metrics + cAdvisor
 
-Each Kubernetes cluster runs its own Prometheus instance deployed using the kube-prometheus-stack Helm chart.
+Each Kubernetes cluster runs its own Prometheus instance deployed via the `kube-prometheus-stack` Helm chart. The design intentionally avoids a single centralized Prometheus scraping multiple clusters — that pattern creates a scalability bottleneck and a single point of failure.
 
-The design intentionally avoids a single centralized Prometheus scraping multiple clusters because that becomes both a scalability bottleneck and a single point of failure.
+### Scraping — On-Premise Cluster (Nairobi DC)
 
-Instead, every cluster is independently observable and exports metrics to a centralized Grafana layer.
-
-### On-Premise Cluster (Nairobi DC)
-
-The on-premise kubeadm cluster runs:
-
-- Prometheus for metrics collection
-- Node Exporter on all bare-metal nodes for host-level metrics
-- cAdvisor for container runtime metrics
-- kube-state-metrics for Kubernetes object state metrics
+The on-premise kubeadm cluster runs Prometheus, Node Exporter on all bare-metal nodes, cAdvisor for container runtime metrics, and kube-state-metrics for Kubernetes object state.
 
 Prometheus scrapes:
-
 - Node CPU, memory, disk, filesystem, and network usage
-- Pod/container resource consumption
+- Pod and container resource consumption
 - Kubernetes deployment and replica state
 - API server and kubelet metrics
 - Application `/metrics` endpoints
 
-Retention strategy:
+### Scraping — AWS EKS Cluster (af-south-1)
 
-- 15 days hot storage on local PVC-backed Prometheus TSDB
-- 90 days cold retention via remote write to long-term object storage
+The EKS cluster runs the same stack for operational consistency: Prometheus, Node Exporter, cAdvisor, and kube-state-metrics. This standardization keeps dashboards and alert rules reusable across environments.
 
-Given the team size (2 platform engineers), operational simplicity matters more than building a fully distributed Thanos topology on day one.
+EKS-specific scrape targets include managed node groups (spot and on-demand), ingress controller metrics, cluster autoscaler metrics, and future ArgoCD metrics.
 
-### AWS EKS Cluster (af-south-1)
+### Federation and Aggregation
 
-The EKS cluster runs the same monitoring stack for operational consistency:
+Each Prometheus instance uses `remote_write` to push metrics to a centralized **Grafana Mimir** instance hosted in af-south-1. Mimir provides a horizontally scalable, multi-tenant query layer across both clusters without requiring Thanos sidecar complexity.
 
-- Prometheus
-- Node Exporter
-- cAdvisor
-- kube-state-metrics
+Grafana connects to Mimir as a single datasource, providing a unified query and dashboard layer across both environments. Engineers can compare on-prem and EKS workloads in a single panel using cluster-label selectors.
 
-This standardization ensures dashboards and alerts remain reusable across environments.
+```
+On-Prem Prometheus ──remote_write──▶ ┐
+                                      Mimir (af-south-1) ◀── Grafana
+EKS Prometheus     ──remote_write──▶ ┘
+```
 
-Prometheus on EKS scrapes:
+### Retention and Cost
 
-- Managed node groups (spot + on-demand)
-- Kubernetes workloads
-- Customer-facing APIs
-- Ingress controller metrics
-- Cluster autoscaler metrics
-- Future ArgoCD metrics
+- **Hot retention**: 15 days on local Prometheus TSDB (PVC-backed) per cluster
+- **Long-term retention**: Mimir writes to S3 (af-south-1) with a 90-day retention policy
+- **Cost control**: Mimir's block compaction and downsampling reduce S3 storage costs over time. Recording rules pre-aggregate high-cardinality metrics so raw series are not retained longer than needed.
 
-### Unified Visualization Layer
-
-A centralized Grafana instance provides a single-pane operational view across both clusters.
-
-Grafana connects to:
-
-- On-prem Prometheus
-- EKS Prometheus
-- Loki log backends
-
-This allows engineers to:
-
-- Compare workload health between clusters
-- Correlate infrastructure and application incidents
-- Build shared dashboards for future development teams
-- Create audit-visible operational dashboards for ISO 27001 evidence
-
-### Why This Design
-
-This architecture deliberately favors:
-
-- Low operational overhead
-- Fast onboarding
-- Predictable troubleshooting
-- Simple scaling to the future EU cluster
-
-With only two platform engineers, introducing Thanos federation, Cortex, or Mimir immediately would add unnecessary operational complexity before the organization has observability maturity.
+With a USD 800/month budget, self-hosted Mimir on a small EKS node group is significantly cheaper than Amazon Managed Prometheus at equivalent retention volumes.
 
 ---
 
@@ -88,140 +49,132 @@ With only two platform engineers, introducing Thanos federation, Cortex, or Mimi
 
 ### Stack: Promtail → Loki → Grafana
 
-The logging layer is built around:
+The logging layer replaces the existing Fluentd + ELK deployment with Promtail, Grafana Loki, and Grafana.
 
-- Promtail
-- Grafana Loki
-- Grafana
-
-This replaces the existing legacy Fluentd + ELK deployment.
-
-### Why Loki Instead of ELK
-
-The current ELK stack creates operational overhead that is difficult to justify for a small platform team:
-
-- Elasticsearch storage tuning
-- JVM memory management
-- Index lifecycle management
-- High storage consumption
-
-Loki is better aligned with the current requirements because it:
-
-- Stores compressed logs cheaply in object storage
-- Uses labels instead of heavy indexing
-- Integrates natively with Grafana
-- Requires significantly fewer infrastructure resources
-
-This keeps operational costs within the USD 800/month budget.
+**Why Loki over ELK**: Elasticsearch requires JVM memory tuning, index lifecycle management, and high storage. Loki stores compressed logs in object storage using label-based indexing — operationally simpler and significantly cheaper at this scale.
 
 ### Promtail Deployment
 
-Promtail runs as a DaemonSet in both clusters and tails:
+Promtail runs as a DaemonSet in both clusters and tails container stdout/stderr, Kubernetes events, node system logs, and journald where applicable. It automatically attaches Kubernetes metadata: `namespace`, `pod`, `container`, `node`, `cluster`, and application labels — removing the need for developers to manually enrich logs.
 
-- Container stdout/stderr logs
-- Kubernetes events
-- Node-level system logs
-- journald logs where required
+### Structured Logging and Trace Correlation
 
-Promtail attaches Kubernetes metadata automatically:
+Applications are expected to emit logs as structured JSON. Promtail is configured with a pipeline stage to parse the `trace_id` field from JSON log lines and promote it to a Loki label:
 
-- namespace
-- pod
-- container
-- node
-- cluster
-- application labels
+```yaml
+- json:
+    expressions:
+      trace_id: trace_id
+- labels:
+    trace_id:
+```
 
-This removes the need for developers to manually enrich logs.
+This enables log-to-trace correlation in Grafana. When an engineer views a trace in Tempo, they can jump directly to the logs for that specific request using the shared `trace_id`. OpenTelemetry SDK propagation handles injecting `trace_id` into application log output.
 
-### Reliability During Connectivity Issues
+### Reliable Delivery from On-Premise
 
-Because the clusters are connected over AWS Direct Connect, temporary link degradation is possible.
+Because clusters connect over AWS Direct Connect, transient link degradation is possible. Promtail uses local position tracking, retry queues, and buffered delivery to ensure logs are not lost during connectivity interruptions. On recovery, Promtail resumes from the last committed position.
 
-Promtail uses:
+### Retention
 
-- local position tracking
-- retry queues
-- buffered delivery
+- **Queryable**: 30 days in Loki object storage (S3, af-south-1)
+- **Archived**: S3 lifecycle rules transition to Glacier after 30 days; 1-year archival retention for compliance
 
-This ensures logs are not immediately lost during transient failures between on-prem and AWS.
+### Data Residency
 
-### Data Residency Compliance
-
-Customer PII logs must remain within AWS af-south-1.
-
-To enforce this:
-
-- Loki storage for customer-facing workloads resides entirely in af-south-1
-- Promtail routing rules separate operational logs from customer application logs
-- Sensitive workloads are labeled and routed accordingly
-
-This satisfies the stated data residency constraint.
-
-### Retention Strategy
-
-#### Queryable Logs
-
-- 30 days retained in Loki object storage
-
-#### Archived Logs
-
-- S3 lifecycle rules transition logs to Glacier after 30 days
-- 1-year archival retention satisfies compliance and audit requirements
-
-### Security Improvements
-
-Compared to the current state (“Fluentd without TLS”), the new design introduces:
-
-- TLS encryption between Promtail and Loki
-- Centralized access control through Grafana
-- Audit-visible log access
-- Immutable object-storage-backed retention
-
-These controls directly support ISO 27001 audit requirements.
+Customer PII logs are routed exclusively to Loki storage in af-south-1 via Promtail label-based routing rules. Sensitive workloads are labeled at the pod level and routed accordingly, satisfying the stated data residency constraint.
 
 ---
 
 ## 5c. Alerting
 
-### Alerting Stack
+### Stack: Prometheus + Alertmanager + Grafana Alerting + PagerDuty + Email
 
-The alerting solution is built using:
+### SLO Definition — API Service (Target: 99.9% over 30 days)
 
-- Prometheus
-- Alertmanager
-- Grafana Alerting
-- Email notifications
-- PagerDuty
+99.9% availability over 30 days allows a maximum **43.8 minutes of downtime** per month.
 
-Prometheus is responsible for evaluating alert rules, while Alertmanager handles alert routing, grouping, deduplication, and escalation management. Grafana provides centralized alert visualization, operational dashboards, and alert history.
+**Error rate SLO**:
+```
+sum(rate(http_requests_total{status=~"5.."}[5m]))
+/
+sum(rate(http_requests_total[5m])) < 0.001
+```
+
+**Latency SLO** (p99 < 500ms):
+```
+histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m])) < 0.5
+```
+
+**Burn rate alerts** replace naive threshold alerts to reduce fatigue:
+
+| Window | Burn Rate | Severity | Action |
+|--------|-----------|----------|--------|
+| 1h     | 14×       | Critical | Page on-call immediately |
+| 6h     | 6×        | Warning  | Slack notification |
+| 3d     | 1×        | Info     | Ticket for review |
+
+A 14× burn rate over 1 hour means the error budget will be exhausted in ~2 hours — warranting immediate escalation. A 1× burn rate over 3 days is slow degradation worth tracking but not waking anyone up for.
+
+### Alert Fatigue Strategy
+
+Rules created and why:
+
+- **CrashLoopBackOff** (>2 restarts in 10m) — actionable, indicates broken deployment
+- **PodNotReady** (>5m) — indicates scheduling or startup failure
+- **HighErrorRate** (burn-rate based, not raw %) — avoids noisy transient spikes
+- **NodeMemoryPressure** — precursor to OOMKill events
+- **PVCNearFull** (>85%) — gives time to act before data loss
+
+Rules explicitly **not created**:
+- CPU usage thresholds (too noisy, rarely actionable alone)
+- Pod restarts < 2 (transient, not worth paging)
+- Liveness probe failures without sustained impact
+
+All alerts require a `for` duration of at least 2–5 minutes to eliminate single-scrape false positives.
+
+### On-Call Escalation
+
+```
+Prometheus fires alert
+        │
+        ▼
+Alertmanager routes by severity
+        │
+   ┌────┴─────┐
+   ▼          ▼
+ Email     PagerDuty
+(warning)  (critical)
+               │
+         ┌─────┴──────┐
+         ▼            ▼
+    On-call eng   Escalate to
+    (0–15 min)    senior / lead
+                  (15–30 min)
+```
+
+PagerDuty escalation policy: if the primary on-call does not acknowledge within 15 minutes, the incident auto-escalates to the secondary. After 30 minutes unacknowledged, it pages the engineering lead.
 
 ---
 
-### Alerting Architecture and Setup
+## 5d. Trade-offs
 
-The monitoring and alerting stack is deployed consistently across both the on-premise Kubernetes cluster and the Amazon EKS cluster using the `kube-prometheus-stack` Helm chart.
+### Managed Services vs Self-Hosted
 
-Key setup components include:
+Given a USD 800/month infrastructure budget and a two-person platform team, self-hosted wins for the core observability stack. The operational cost of learning Loki and Mimir is a one-time investment; the ongoing cost of Amazon Managed Prometheus and CloudWatch at equivalent retention is prohibitive.
 
-- Prometheus deployed per cluster for local metric scraping and alert rule evaluation
-- Alertmanager deployed alongside Prometheus for centralized notification management
-- Grafana configured with both Prometheus instances as data sources for unified visibility
-- SMTP integration configured within Alertmanager for email notifications
-- PagerDuty integrated using the PagerDuty Events API for critical incident escalation
+Exceptions where managed services are worth the cost:
+- **S3 + Glacier** for log and metric archival — undifferentiated storage, not worth self-managing
+- **PagerDuty** for on-call — reliability of incident delivery is not a place to cut costs
 
-This architecture ensures each cluster remains operationally independent while still providing centralized observability and incident management.
+### What We Would Not Do in the First 90 Days
 
----
+| What | Why not yet |
+|------|-------------|
+| Thanos federation | Mimir remote_write covers the multi-cluster query requirement at lower complexity |
+| Distributed tracing (Tempo + OTel) full rollout | High instrumentation effort; lay the groundwork (trace_id in logs) first |
+| Custom Grafana plugin development | Premature; use off-the-shelf dashboards from kube-prometheus-stack |
+| Multi-region Loki replication | Single af-south-1 region satisfies current data residency; replication adds cost without current need |
+| SLO dashboards for every service | Start with the one customer-facing API; expand once the pattern is proven |
 
-### Alert Flow
-
-```text
-Prometheus
-    ↓
-Alertmanager
-    ↓
- ┌────────────────┬
- ↓                ↓
-Email          PagerDuty
-Notifications  Incident Escalation
+The first 90 days should produce a working, alerting, queryable observability stack — not a perfectly architected one.
