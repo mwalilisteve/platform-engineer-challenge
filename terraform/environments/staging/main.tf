@@ -14,8 +14,6 @@ provider "aws" {
   region = var.aws_region
 }
 
-# No bug here — data source is valid; account_id used in the eks module for IRSA.
-data "aws_caller_identity" "this" {}
 
 data "aws_availability_zones" "available" {
   state = "available"
