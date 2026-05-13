@@ -113,3 +113,56 @@ resource "aws_eks_node_group" "this" {
 
   tags = var.tags
 }
+
+# ── IRSA role for app-sa service account ────────────────────────────────────
+
+locals {
+  oidc_issuer = replace(aws_iam_openid_connect_provider.this.url, "https://", "")
+}
+
+resource "aws_iam_role" "app_sa" {
+  name = "${var.cluster_name}-app-sa-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Federated = aws_iam_openid_connect_provider.this.arn
+      }
+      Action = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "${local.oidc_issuer}:sub" = "system:serviceaccount:default:app-sa"
+          "${local.oidc_issuer}:aud" = "sts.amazonaws.com"
+        }
+      }
+    }]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_policy" "app_sa" {
+  name        = "${var.cluster_name}-app-sa-policy"
+  description = "Permissions for the app-sa Kubernetes service account"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      # Adjust these permissions to what your app actually needs
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:ListBucket"]
+        Resource = "*"
+      }
+    ]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy_attachment" "app_sa" {
+  role       = aws_iam_role.app_sa.name
+  policy_arn = aws_iam_policy.app_sa.arn
+}
