@@ -25,11 +25,11 @@
 ## Key Decisions and Trade-offs
 
 ### Task 1 — Terraform
-
-- **Bug 1 (ELB subnet tags):** Tags used integer `0`; AWS requires the string `"1"` for EKS to discover subnets when provisioning load balancers.
-- **Bug 2 (Control-plane subnets):** Module was passed `public_subnets` — corrected to `private_subnets` to avoid exposing the API server.
-- **Bug 3 (Module body):** `main.tf` was a copy of `variables.tf` with no resources. Rewrote it with the full EKS cluster, OIDC provider, IAM roles, and node group.
-- **Bug 4 (Node group):** No instance type defined and scaling values were wrong. Moved instance type to a launch template (required to tag EC2 instances, not just the node group object) and corrected scaling to min 1 / max 3.
+- **Bug 1 (ELB subnet tags):** Removed Data source  referencing a non-existent attribute
+- **Bug 2 (ELB subnet tags):** Tags used integer `0`; AWS requires the string `"1"` for EKS to discover subnets when provisioning load balancers.
+- **Bug 3 (Control-plane subnets):** Module was passed `public_subnets` — corrected to `private_subnets` to avoid exposing the API server.
+- **Bug 4 (Module body):** `main.tf` was a copy of `variables.tf` with no resources. Rewrote it with the full EKS cluster, OIDC provider, IAM roles, and node group.
+- **Bug 5 (Node group):** No instance type defined and scaling values were wrong. Moved instance type to a launch template (required to tag EC2 instances, not just the node group object) and corrected scaling to min 1 / max 3.
 - **IRSA:** Trust policy uses both `sub` and `aud` conditions — omitting `aud` is a common mistake that over-permits role assumption.
 - **Backend:** Static key string used intentionally — Terraform does not support variable interpolation in backend blocks. The `staging/eks-cluster/` path makes adding a production workspace straightforward.
 - **Plan output:** No AWS account available. `terraform validate` passes. Reviewer instructions are in the "How to Test" section.
