@@ -55,10 +55,12 @@
 ### Task 5 — Architecture
 
 Full design in `docs/observability-design.md`. Core trade-offs:
-
-- **Loki self-hosted vs Grafana Cloud:** Managed Loki at this scale would consume ~2× the $800 budget. Self-hosting on two `m6i.large` nodes costs ~$180/month with equivalent capability.
-- **Thanos vs VictoriaMetrics:** Thanos was chosen because the team already has Prometheus knowledge; it is a thin sidecar add-on rather than a full replacement. VictoriaMetrics is the natural migration path if operational complexity grows.
-
+Self-hosted vs managed metrics: Amazon Managed Prometheus and CloudWatch at equivalent retention volumes would exceed the USD 800/month budget. Self-hosted Mimir on a small EKS node group covers both clusters at a fraction of that cost, with Mimir's block compaction keeping S3 storage costs predictable.
+Mimir over Thanos: Both solve multi-cluster metric aggregation, but Mimir fits better here — remote_write from each Prometheus instance is simpler to operate than Thanos sidecars, object store buckets per cluster, and a Thanos Query frontend. Thanos remains a valid migration path if the team grows and needs per-cluster bucket isolation.
+Loki over ELK: Elasticsearch requires JVM tuning, index lifecycle management, and significant storage. Loki's label-based indexing and object storage backend cuts both operational overhead and cost — important for a two-person team on a fixed budget.
+Promtail over Fluentd: Promtail attaches Kubernetes metadata automatically and integrates natively with Loki. Fluentd requires additional plugins and configuration to achieve the same result.
+Burn rate alerts over threshold alerts: Raw percentage thresholds generate noise during transient spikes. Burn rate alerts fire only when the error budget is being consumed fast enough to matter, reducing pages and alert fatigue.
+S3 + Glacier for archival: The one place managed storage is used — undifferentiated object storage is not worth self-managing, and Glacier meets the 1-year compliance retention requirement cheaply.
 ---
 
 ## Assumptions
